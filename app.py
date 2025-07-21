@@ -15,7 +15,7 @@ FTP_USER = "gpftp37275281717442833"
 FTP_PASS = "LXNdGShY"
 LOG_DIR = "/SCUM/Saved/SaveFiles/Logs"
 
-WEBHOOK_URL = "https://discord.com/api/webhooks/your_webhook_here"  # Podmień na swój webhook
+WEBHOOK_URL = "https://discord.com/api/webhooks/1396497733984059472/ie6Hk_yTKETBHBriA9aCP0IbWJbqwXeskGiAdMyP2RMy_ww1Z2h2UCaw4jTbbOJ_e3gO"  # Podmień na swój webhook
 
 def get_file_list(ftp):
     files = []
