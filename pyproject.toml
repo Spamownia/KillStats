@@ -9,7 +9,6 @@ python = "^3.11"
 flask = "2.3.2"
 requests = "2.32.4"
 apscheduler = "3.10.1"
-pillow = "9.5.0"
 
 [build-system]
 requires = ["poetry-core"]
