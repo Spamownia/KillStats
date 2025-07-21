@@ -1,5 +1,11 @@
+# --- AUTOMATYCZNA INSTALACJA ---
 import subprocess
 import sys
+
+for pkg in ["requests", "pillow"]:
+    subprocess.run([sys.executable, "-m", "pip", "install", pkg])
+
+# --- IMPORTY ---
 import re
 import csv
 import statistics
@@ -7,39 +13,27 @@ import requests
 from collections import defaultdict
 from ftplib import FTP
 from io import BytesIO
-import os
-from flask import Flask, jsonify
+from flask import Flask
 from apscheduler.schedulers.background import BackgroundScheduler
 
-# --- AUTOMATYCZNA INSTALACJA (cicho) ---
-def silent_install(package):
-    try:
-        __import__(package)
-    except ImportError:
-        subprocess.run([sys.executable, "-m", "pip", "install", package],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+app = Flask(__name__)
 
-for pkg in ["requests", "pillow"]:
-    silent_install(pkg)
+# --- FUNKCJA WYSYŁANIA NA DISCORD ---
+def send_discord(content, webhook_url):
+    requests.post(
+        webhook_url,
+        json={"content": content}
+    )
 
-# --- KONFIGURACJA FTP I WEBHOOK ---
+# --- KONFIGURACJA FTP ---
 FTP_IP = "176.57.174.10"
 FTP_PORT = 50021
 FTP_USER = "gpftp37275281717442833"
 FTP_PASS = "LXNdGShY"
 FTP_PATH = "/SCUM/Saved/SaveFiles/Logs"
 
-WEBHOOK_TABLE1 = "https://discord.com/api/webhooks/1396229686475886704/Mp3CbZdHEob4tqsPSvxWJfZ63-Ao9admHCvX__XdT5c-mjYxizc7tEvb08xigXI5mVy3"
-WEBHOOK_TABLE2 = "https://discord.com/api/webhooks/1396229686475886704/Mp3CbZdHEob4tqsPSvxWJfZ63-Ao9admHCvX__XdT5c-mjYxizc7tEvb08xigXI5mVy3"
-WEBHOOK_TABLE3 = "https://discord.com/api/webhooks/1396229686475886704/Mp3CbZdHEob4tqsPSvxWJfZ63-Ao9admHCvX__XdT5c-mjYxizc7tEvb08xigXI5mVy3"
-
-# --- FUNKCJA DO WYSYŁANIA NA DISCORD ---
-def send_discord(content, webhook_url):
-    try:
-        resp = requests.post(webhook_url, json={"content": content})
-        resp.raise_for_status()
-    except Exception as e:
-        print(f"[BŁĄD] Nie udało się wysłać na Discord: {e}")
+# --- KOLEJNOŚĆ ZAMKÓW ---
+lock_order = {"VeryEasy": 0, "Basic": 1, "Medium": 2, "Advanced": 3, "DialLock": 4}
 
 # --- WZORZEC ---
 pattern = re.compile(
@@ -51,17 +45,13 @@ pattern = re.compile(
     r"Lock type: (?P<lock_type>\w+)\."
 )
 
-# --- KOLEJNOŚĆ ZAMKÓW ---
-lock_order = {"VeryEasy": 0, "Basic": 1, "Medium": 2, "Advanced": 3, "DialLock": 4}
-
-app = Flask(__name__)
-
-def main_task():
+def job():
     print("[INFO] Sprawdzanie logów...")
 
     try:
+        # --- POBIERANIE LOGÓW Z FTP ---
         ftp = FTP()
-        ftp.connect(FTP_IP, FTP_PORT, timeout=30)
+        ftp.connect(FTP_IP, FTP_PORT)
         ftp.login(FTP_USER, FTP_PASS)
         ftp.cwd(FTP_PATH)
 
@@ -82,14 +72,15 @@ def main_task():
 
         latest_log = sorted(log_files)[-1]
 
-        # Pobranie logu
+        # --- POBRANIE LOGU ---
+        log_text = ""
         with BytesIO() as bio:
             ftp.retrbinary(f"RETR {latest_log}", bio.write)
             log_text = bio.getvalue().decode("utf-16-le", errors="ignore")
 
         ftp.quit()
 
-        # Parsowanie logu
+        # --- PARSOWANIE ---
         data = {}
         user_lock_times = defaultdict(lambda: defaultdict(list))
 
@@ -142,7 +133,7 @@ def main_task():
                 f"{effectiveness}%", f"{avg_time}s"
             ])
 
-        # Zapis CSV
+        # --- ZAPIS CSV ---
         with open("logi.csv", "w", newline='', encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow([
@@ -170,6 +161,7 @@ def main_task():
             writer.writerows(admin_csv_rows)
 
         # --- WYSYŁKA TABELI GŁÓWNEJ ---
+        webhook_table1 = "https://discord.com/api/webhooks/1396229686475886704/Mp3CbZdHEob4tqsPSvxWJfZ63-Ao9admHCvX__XdT5c-mjYxizc7tEvb08xigXI5mVy3"
         table_block = "```\n"
         table_block += f"{'Nick':<10} {'Zamek':<10} {'Wszystkie':<12} {'Udane':<6} {'Nieudane':<9} {'Skut.':<8} {'Śr. czas':<8}\n"
         table_block += "-" * 70 + "\n"
@@ -179,9 +171,10 @@ def main_task():
             else:
                 table_block += "\n"
         table_block += "```"
-        send_discord(table_block, WEBHOOK_TABLE1)
+        send_discord(table_block, webhook_table1)
 
         # --- WYSYŁKA TABELI ADMIN ---
+        webhook_table2 = "https://discord.com/api/webhooks/1396229686475886704/Mp3CbZdHEob4tqsPSvxWJfZ63-Ao9admHCvX__XdT5c-mjYxizc7tEvb08xigXI5mVy3"
         summary_block = "```\n"
         summary_block += f"{'Nick':<10} {'Zamek':<10} {'Skut.':<10} {'Śr. czas':<10}\n"
         summary_block += "-" * 45 + "\n"
@@ -191,9 +184,10 @@ def main_task():
             else:
                 summary_block += "\n"
         summary_block += "```"
-        send_discord(summary_block, WEBHOOK_TABLE2)
+        send_discord(summary_block, webhook_table2)
 
         # --- TABELA PODIUM ---
+        webhook_table3 = "https://discord.com/api/webhooks/1396229686475886704/Mp3CbZdHEob4tqsPSvxWJfZ63-Ao9admHCvX__XdT5c-mjYxizc7tEvb08xigXI5mVy3"
         ranking = []
         for nick in user_lock_times:
             times_all = [t for lock in user_lock_times[nick].values() for t in lock]
@@ -219,21 +213,19 @@ def main_task():
             podium_block += f"{medal:<2}{place:^{col_widths[0]-2}}{nick:^{col_widths[1]}}{str(eff)+'%':^{col_widths[2]}}{str(avg)+' s':^{col_widths[3]}}\n"
 
         podium_block += "```"
-        send_discord(podium_block, WEBHOOK_TABLE3)
+        send_discord(podium_block, webhook_table3)
 
-        print("[INFO] Wykonano zadanie pomyślnie.")
-
+        print("[INFO] Wysłano aktualizację.")
     except Exception as e:
-        print(f"[BŁĄD] W trakcie wykonania: {e}")
+        print(f"[ERROR] Wystąpił błąd: {e}")
 
 scheduler = BackgroundScheduler()
-scheduler.add_job(main_task, "interval", seconds=60)
+scheduler.add_job(job, 'interval', seconds=60)
 scheduler.start()
 
 @app.route("/")
 def index():
-    return jsonify({"status": "running", "message": "Skrypt działa."})
+    return "Serwer działa."
 
 if __name__ == "__main__":
-    print("[START] Uruchamianie serwera Flask...")
-    app.run(host="0.0.0.0", port=5000)
+    app.run(host="0.0.0.0", port=8000)
