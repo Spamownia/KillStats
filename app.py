@@ -180,7 +180,7 @@ def process_logs_and_send():
             podium_block += f"{medal:<2}{place:^{col_widths[0]-2}}{nick:^{col_widths[1]}}{str(eff)+'%':^{col_widths[2]}}{str(avg)+' s':^{col_widths[3]}}\n"
 
         podium_block += "```"
-        webhook_table3 = "https://discord.com/api/webhooks/1396229686475886704/..."  # Twój webhook
+        webhook_table3 = "https://discord.com/api/webhooks/1396229686475886704/Mp3CbZdHEob4tqsPSvxWJfZ63-Ao9admHCvX__XdT5c-mjYxizc7tEvb08xigXI5mVy3"  # Twój webhook
         send_discord(podium_block, webhook_table3)
 
         print("[INFO] Raporty wysłane pomyślnie.")
