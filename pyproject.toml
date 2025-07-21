@@ -1,2 +1,16 @@
+[tool.poetry]
+name = "killstats"
+version = "0.1.0"
+description = ""
+authors = ["Twoje Imię <twoj@email.com>"]
+
 [tool.poetry.dependencies]
 python = "^3.11"
+Flask = "2.3.2"
+requests = "2.32.4"
+APScheduler = "3.10.1"
+pillow = "9.5.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
