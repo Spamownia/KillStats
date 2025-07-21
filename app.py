@@ -1,197 +1,202 @@
-# --- AUTOMATYCZNA INSTALACJA ---
-import subprocess
-import sys
-
-for pkg in ["requests", "apscheduler"]:
-    subprocess.run([sys.executable, "-m", "pip", "install", pkg])
-
-# --- IMPORTY ---
-import re
 import csv
-import statistics
+from collections import Counter
+import os
+import re
 import requests
-from collections import defaultdict
+import time
+import threading
 from ftplib import FTP
-from io import BytesIO
-from apscheduler.schedulers.blocking import BlockingScheduler
+from flask import Flask
 
-# --- FUNKCJA WYSYŁANIA NA DISCORD ---
-def send_discord(content, webhook_url):
-    requests.post(webhook_url, json={"content": content})
-
-# --- KONFIGURACJA FTP ---
-FTP_IP = "176.57.174.10"
+# FTP config
+FTP_HOST = "176.57.174.10"
 FTP_PORT = 50021
 FTP_USER = "gpftp37275281717442833"
 FTP_PASS = "LXNdGShY"
-FTP_PATH = "/SCUM/Saved/SaveFiles/Logs"
+LOG_DIR = "/SCUM/Saved/SaveFiles/Logs"
 
-# --- FUNKCJA GŁÓWNA ---
-def process_logs_and_send():
-    try:
-        ftp = FTP()
-        ftp.connect(FTP_IP, FTP_PORT)
-        ftp.login(FTP_USER, FTP_PASS)
-        ftp.cwd(FTP_PATH)
+WEBHOOK_URL = "https://discord.com/api/webhooks/your_webhook_here"  # Podmień na swój webhook
 
-        log_files = []
-        ftp.retrlines("MLSD", lambda line: log_files.append(line.split(";")[-1].strip()))
-        log_files = [f for f in log_files if f.startswith("gameplay_") and f.endswith(".log")]
+def get_file_list(ftp):
+    files = []
 
-        if not log_files:
-            print("[ERROR] Brak plików gameplay_*.log na FTP.")
-            ftp.quit()
-            return
+    def parse_line(line):
+        parts = line.split(maxsplit=8)
+        if len(parts) == 9:
+            filename = parts[8]
+            files.append(filename)
 
-        latest_log = sorted(log_files)[-1]
+    ftp.retrlines('LIST', callback=parse_line)
+    return files
 
-        log_text = ""
-        with BytesIO() as bio:
-            ftp.retrbinary(f"RETR {latest_log}", bio.write)
-            log_text = bio.getvalue().decode("utf-16-le", errors="ignore")
+def get_latest_log_from_ftp():
+    ftp = FTP()
+    ftp.connect(FTP_HOST, FTP_PORT)
+    ftp.login(FTP_USER, FTP_PASS)
+    ftp.cwd(LOG_DIR)
 
+    files = get_file_list(ftp)
+    kill_logs = sorted([f for f in files if f.startswith("kill_") and f.endswith(".log")])
+    if not kill_logs:
         ftp.quit()
+        return None
 
-        pattern = re.compile(
-            r"User: (?P<nick>[\w\d]+) \(\d+, [\d]+\)\. "
-            r"Success: (?P<success>Yes|No)\. "
-            r"Elapsed time: (?P<elapsed>[\d\.]+)\. "
-            r"Failed attempts: (?P<failed_attempts>\d+)\. "
-            r"Target object: [^\)]+\)\. "
-            r"Lock type: (?P<lock_type>\w+)\."
-        )
+    latest_log = kill_logs[-1]
+    print(f"[FTP] Ostatni log: {latest_log}")
 
-        data = {}
-        user_lock_times = defaultdict(lambda: defaultdict(list))
+    local_log = "latest_kill.log"
+    with open(local_log, "wb") as f:
+        ftp.retrbinary(f"RETR {latest_log}", f.write)
 
-        for match in pattern.finditer(log_text):
-            nick = match.group("nick")
-            lock_type = match.group("lock_type")
-            success = match.group("success")
-            failed_attempts = int(match.group("failed_attempts"))
-            elapsed = float(match.group("elapsed"))
+    ftp.quit()
+    return local_log
 
-            key = (nick, lock_type)
-            if key not in data:
-                data[key] = {
-                    "all_attempts": 0,
-                    "successful_attempts": 0,
-                    "failed_attempts": 0,
-                    "times": [],
-                }
+def read_new_lines(log_file, cache_file="last_log_line.txt"):
+    if not os.path.exists(cache_file):
+        open(cache_file, 'w').close()
 
-            data[key]["all_attempts"] += 1
-            if success == "Yes":
-                data[key]["successful_attempts"] += 1
+    with open(cache_file, "r") as f:
+        last_line = f.read().strip()
+
+    with open(log_file, "r", encoding="utf-8", errors="ignore") as f:
+        lines = f.readlines()
+
+    new_lines = []
+    found_last = last_line == ""
+    for line in lines:
+        line = line.strip()
+        if found_last:
+            new_lines.append(line)
+        elif line == last_line:
+            found_last = True
+
+    if lines:
+        with open(cache_file, "w") as f:
+            f.write(lines[-1].strip())
+
+    return new_lines
+
+def parse_and_update_kills(log_lines, csv_file="kills.csv"):
+    if os.path.exists(csv_file):
+        with open(csv_file, mode='r', newline='', encoding='utf-8') as file:
+            reader = csv.DictReader(file)
+            rows = list(reader)
+            last_count = int(rows[-1]["suma_zabojstw"]) if rows else 0
+    else:
+        last_count = 0
+
+    file_exists = os.path.isfile(csv_file)
+    fieldnames = ["data_czas", "zabojca", "ofiara", "bron", "odleglosc", "suma_zabojstw"]
+
+    with open(csv_file, mode='a', newline='', encoding='utf-8') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        if not file_exists:
+            writer.writeheader()
+
+        for line in log_lines:
+            if "Died:" in line:
+                match = re.search(r'^(.*?)\: Died: (.*?) \(\d+\), Killer: (.*?) \(\d+\) Weapon: (.*?) S:.*Distance: ([\d\.]+) m', line)
+                if match:
+                    data_czas = match.group(1).replace('.', '-').replace('-', ' ', 2).replace('-', ':', 1)
+                    ofiara = match.group(2)
+                    zabojca = match.group(3)
+                    bron = match.group(4).strip()
+                    odleglosc = match.group(5).strip()
+
+                    last_count += 1
+
+                    writer.writerow({
+                        "data_czas": data_czas,
+                        "zabojca": zabojca,
+                        "ofiara": ofiara,
+                        "bron": bron,
+                        "odleglosc": odleglosc,
+                        "suma_zabojstw": last_count
+                    })
+                    print(f"[OK] Zapisano: {data_czas}, {zabojca}, {ofiara}, {bron}, {odleglosc}m, suma: {last_count}")
+
+def generate_podium(csv_file="kills.csv", podium_file="podium.csv"):
+    kills_count = Counter()
+    with open(csv_file, mode='r', newline='', encoding='utf-8') as file:
+        reader = csv.DictReader(file)
+        for row in reader:
+            kills_count[row["zabojca"]] += 1
+
+    sorted_kills = kills_count.most_common()
+    podium_rows = []
+    medale = ["🥇", "🥈", "🥉"]
+
+    for i, (nick, ilosc) in enumerate(sorted_kills, start=1):
+        medal = medale[i-1] if i <= 3 else ""
+        podium_rows.append({
+            "medal": medal,
+            "Miejsce": str(i),
+            "Nick": nick,
+            "Suma Zabójstw": str(ilosc)
+        })
+
+    fieldnames = ["medal", "Miejsce", "Nick", "Suma Zabójstw"]
+    col_widths = {field: len(field) for field in fieldnames}
+    for row in podium_rows:
+        for field in fieldnames:
+            col_widths[field] = max(col_widths[field], len(row.get(field, "")))
+
+    lines = ["🏆RANKING🏆", ""]
+    header = " | ".join(f"{field.center(col_widths[field])}" if field != "medal" else " ".center(col_widths[field]) for field in fieldnames)
+    separator = "-+-".join('-'*col_widths[field] for field in fieldnames)
+    lines.append(header)
+    lines.append(separator)
+    for row in podium_rows:
+        line = " | ".join(f"{row.get(field,'').center(col_widths[field])}" for field in fieldnames)
+        lines.append(line)
+
+    table_text = "```\n" + "\n".join(lines) + "\n```"
+
+    with open(podium_file, mode='w', newline='', encoding='utf-8') as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in podium_rows:
+            writer.writerow(row)
+
+    print(f"[OK] Podium zapisane do {podium_file}")
+
+    response = requests.post(WEBHOOK_URL, json={"content": table_text})
+    if response.status_code == 204:
+        print("[OK] Tabela podium wysłana na Discord.")
+    else:
+        print(f"[BŁĄD] Nie udało się wysłać na Discord: {response.status_code} {response.text}")
+
+def main_loop():
+    print("[START] Skrypt uruchomiony. Sprawdzanie co 60 sekund...")
+    while True:
+        try:
+            latest_log_file = get_latest_log_from_ftp()
+            if not latest_log_file:
+                print("[FTP] Brak plików kill_*.log")
             else:
-                data[key]["failed_attempts"] += 1
+                new_log_lines = read_new_lines(latest_log_file)
+                if new_log_lines:
+                    print(f"[INFO] Znaleziono {len(new_log_lines)} nowych wpisów w logu.")
+                    parse_and_update_kills(new_log_lines)
+                    generate_podium()
+                else:
+                    print("[INFO] Brak nowych wpisów w logu.")
+        except Exception as e:
+            print(f"[BŁĄD] Wyjątek: {e}")
 
-            data[key]["times"].append(elapsed)
-            user_lock_times[nick][lock_type].append(elapsed)
+        time.sleep(60)
 
-        lock_order = {"VeryEasy": 0, "Basic": 1, "Medium": 2, "Advanced": 3, "DialLock": 4}
+# 🔷 Flask server setup
+app = Flask(__name__)
 
-        sorted_data = sorted(
-            data.items(),
-            key=lambda x: (x[0][0], lock_order.get(x[0][1], 99))
-        )
+@app.route('/')
+def index():
+    return "Alive"
 
-        # Tworzenie raportów i wysyłka na Discord
-        # -- Tabela główna
-        csv_rows = []
-        last_nick = None
-        for (nick, lock_type), stats in sorted_data:
-            if last_nick and nick != last_nick:
-                csv_rows.append([""] * 7)
-            last_nick = nick
-
-            all_attempts = stats["all_attempts"]
-            successful_attempts = stats["successful_attempts"]
-            failed_attempts = stats["failed_attempts"]
-            avg_time = round(statistics.mean(stats["times"]), 2) if stats["times"] else 0
-            effectiveness = round(100 * successful_attempts / all_attempts, 2) if all_attempts else 0
-
-            csv_rows.append([
-                nick, lock_type, all_attempts, successful_attempts, failed_attempts,
-                f"{effectiveness}%", f"{avg_time}s"
-            ])
-
-        webhook_table1 = "https://discord.com/api/webhooks/1396229686475886704/..."  # Twój webhook
-        table_block = "```\n"
-        table_block += f"{'Nick':<10} {'Zamek':<10} {'Wszystkie':<12} {'Udane':<6} {'Nieudane':<9} {'Skut.':<8} {'Śr. czas':<8}\n"
-        table_block += "-" * 70 + "\n"
-        for row in csv_rows:
-            if any(row):
-                table_block += f"{row[0]:<10} {row[1]:<10} {str(row[2]):<12} {str(row[3]):<6} {str(row[4]):<9} {row[5]:<8} {row[6]:<8}\n"
-            else:
-                table_block += "\n"
-        table_block += "```"
-        send_discord(table_block, webhook_table1)
-
-        # -- Tabela admin
-        admin_csv_rows = [["Nick", "Rodzaj zamka", "Skuteczność", "Średni czas"]]
-        last_nick_admin = None
-        for (nick, lock_type), stats in sorted_data:
-            if last_nick_admin and nick != last_nick_admin:
-                admin_csv_rows.append([""] * 4)
-            last_nick_admin = nick
-
-            all_attempts = stats["all_attempts"]
-            succ = stats["successful_attempts"]
-            eff = round(100 * succ / all_attempts, 2) if all_attempts else 0
-            avg = round(statistics.mean(stats["times"]), 2) if stats["times"] else 0
-            admin_csv_rows.append([nick, lock_type, f"{eff}%", f"{avg}s"])
-
-        webhook_table2 = "https://discord.com/api/webhooks/1396229686475886704/..."  # Twój webhook
-        summary_block = "```\n"
-        summary_block += f"{'Nick':<10} {'Zamek':<10} {'Skut.':<10} {'Śr. czas':<10}\n"
-        summary_block += "-" * 45 + "\n"
-        for row in admin_csv_rows[1:]:
-            if any(row):
-                summary_block += f"{row[0]:<10} {row[1]:<10} {row[2]:<10} {row[3]:<10}\n"
-            else:
-                summary_block += "\n"
-        summary_block += "```"
-        send_discord(summary_block, webhook_table2)
-
-        # -- Podium
-        ranking = []
-        for nick in user_lock_times:
-            times_all = [t for lock in user_lock_times[nick].values() for t in lock]
-            total_attempts = len(times_all)
-            total_success = sum(1 for lock in user_lock_times[nick].values() for _ in lock)  # uproszczone założenie
-            effectiveness = round(100 * total_success / total_attempts, 2) if total_attempts else 0
-            avg_time = round(statistics.mean(times_all), 2) if total_attempts else 0
-            ranking.append((nick, effectiveness, avg_time))
-
-        ranking = sorted(ranking, key=lambda x: (-x[1], x[2]))[:5]
-
-        col_widths = [10, 14, 14, 14]
-        podium_block = "```\n"
-        podium_block += "                     🏆 PODIUM           \n"
-        podium_block += "-" * sum(col_widths) + "\n"
-        podium_block += f"{'Miejsce':^{col_widths[0]}}{'Nick':^{col_widths[1]}}{'Skuteczność':^{col_widths[2]}}{'Średni czas':^{col_widths[3]}}\n"
-
-        medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
-
-        for i, (nick, eff, avg) in enumerate(ranking):
-            medal = medals[i]
-            place = f"{i+1}"
-            podium_block += f"{medal:<2}{place:^{col_widths[0]-2}}{nick:^{col_widths[1]}}{str(eff)+'%':^{col_widths[2]}}{str(avg)+' s':^{col_widths[3]}}\n"
-
-        podium_block += "```"
-        webhook_table3 = "https://discord.com/api/webhooks/1396229686475886704/Mp3CbZdHEob4tqsPSvxWJfZ63-Ao9admHCvX__XdT5c-mjYxizc7tEvb08xigXI5mVy3"  # Twój webhook
-        send_discord(podium_block, webhook_table3)
-
-        print("[INFO] Raporty wysłane pomyślnie.")
-
-    except Exception as e:
-        print(f"[ERROR] Wystąpił błąd: {e}")
-
-# --- URUCHOMIENIE W PĘTLI CO MINUTĘ ---
 if __name__ == "__main__":
-    scheduler = BlockingScheduler()
-    scheduler.add_job(process_logs_and_send, 'interval', minutes=1)
-    print("[INFO] Uruchomiono scheduler. Wysyłka co 1 minutę.")
-    process_logs_and_send()  # Pierwsze uruchomienie od razu
-    scheduler.start()
+    # Uruchom główną pętlę w osobnym wątku
+    t = threading.Thread(target=main_loop, daemon=True)
+    t.start()
+
+    # Uruchom serwer Flask na 0.0.0.0:10000
+    app.run(host='0.0.0.0', port=10000)
