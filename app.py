@@ -58,7 +58,7 @@ def read_new_lines(log_file, cache_file="last_log_line.txt"):
     with open(cache_file, "r") as f:
         last_line = f.read().strip()
 
-    with open(log_file, "r", encoding="utf-8", errors="ignore") as f:
+    with open(log_file, "r", encoding="utf-16-le", errors="ignore") as f:
         lines = f.readlines()
 
     new_lines = []
