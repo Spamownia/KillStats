@@ -9,8 +9,8 @@ from ftplib import FTP
 from flask import Flask
 
 # FTP config
-FTP_HOST = "176.57.174.10"
-FTP_PORT = 50021
+FTP_HOST = "195.179.226.218"
+FTP_PORT = 56421
 FTP_USER = "gpftp37275281717442833"
 FTP_PASS = "LXNdGShY"
 LOG_DIR = "/SCUM/Saved/SaveFiles/Logs"
