@@ -1,10 +1,10 @@
 import os
 import ftplib
 import re
-import psycopg2
+import psycopg
 import requests
 from datetime import datetime
-from psycopg2 import sql
+from psycopg import sql
 
 # --- KONFIGURACJA FTP ---
 FTP_HOST = "195.179.226.218"
@@ -102,7 +102,7 @@ def send_discord_webhook(message: str):
 
 # --- GŁÓWNA FUNKCJA ---
 def main():
-    conn = psycopg2.connect(
+    conn = psycopg.connect(
         host=DB_HOST,
         dbname=DB_NAME,
         user=DB_USER,
