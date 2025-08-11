@@ -53,7 +53,7 @@ def get_log_files():
     ftp.quit()
     return [f for f in files if f.lower().startswith("kill_") and f.lower().endswith(".log")]
 
-# --- POPRAWIONA FUNKCJA PARSOWANIA LOGU ---
+# --- POPRAWIONA FUNKCJA PARSOWANIA LOGU Z DEBUGAMI ---
 def parse_log(filename):
     ftp = ftplib.FTP()
     ftp.connect(FTP_HOST, FTP_PORT)
@@ -78,14 +78,18 @@ def parse_log(filename):
         zabojca = match.group("zabojca").strip()
         bron = match.group("bron").strip()
 
-        dt_str = data_czas_raw.replace('.', '-').replace('-', ' ', 1).replace('-', ':', 1).replace('-', ':', 1)
+        # Poprawione formatowanie daty dla czytelności i stabilności
         try:
+            dt_str = data_czas_raw.replace('.', '-')
+            dt_str = dt_str[:10] + ' ' + dt_str[11:].replace('.', ':')
             data_czas = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
-        except Exception:
+        except Exception as e:
+            print(f"[DEBUG][BŁĄD DATY] Nie udało się sparsować daty '{data_czas_raw}': {e}")
             continue
 
         entries.append((data_czas, zabojca, ofiara, bron))
 
+    print(f"[DEBUG] W pliku {filename} znaleziono {len(entries)} wpisów pasujących do wzorca.")
     return entries
 
 # --- FUNKCJA WYSYŁAJĄCA WEBHOOK (wyłącznie requests) ---
@@ -100,7 +104,7 @@ def send_discord_webhook(message: str):
     except Exception as e:
         print(f"[WEBHOOK ERROR] Wyjątek: {e}")
 
-# --- GŁÓWNA FUNKCJA ---
+# --- GŁÓWNA FUNKCJA Z DEBUGAMI BAZY ---
 def main():
     conn = psycopg.connect(
         host=DB_HOST,
@@ -125,6 +129,7 @@ def main():
         for entry in entries:
             try:
                 cur.execute(INSERT_SQL, entry)
+                print(f"[DB DEBUG] Próba wstawienia: {entry} | rowcount: {cur.rowcount}")
                 if cur.rowcount == 1:
                     new_entries += 1
             except Exception as e:
