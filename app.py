@@ -88,7 +88,7 @@ def parse_log(filename):
 
     return entries
 
-# --- FUNKCJA WYSYŁAJĄCA WEBHOOK ---
+# --- FUNKCJA WYSYŁAJĄCA WEBHOOK (wyłącznie requests) ---
 def send_discord_webhook(message: str):
     payload = {"content": message}
     try:
