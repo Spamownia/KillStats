@@ -53,7 +53,7 @@ def get_log_files():
     ftp.quit()
     return [f for f in files if f.lower().startswith("kill_") and f.lower().endswith(".log")]
 
-# --- FUNKCJA PARSOWANIA LOGU ---
+# --- POPRAWIONA FUNKCJA PARSOWANIA LOGU ---
 def parse_log(filename):
     ftp = ftplib.FTP()
     ftp.connect(FTP_HOST, FTP_PORT)
@@ -67,17 +67,16 @@ def parse_log(filename):
     content = b"".join(log_data).decode("utf-16-le", errors="ignore")
 
     pattern = re.compile(
-        r"^(.*?)\: Died: (.*?) \(\d+\), Killer: (.*?) \(\d+\) Weapon: (.*?) S:.*Distance: ([\d\.]+) m",
+        r"^(?P<data>\d{4}\.\d{2}\.\d{2}-\d{2}\.\d{2}\.\d{2}): Died: (?P<ofiara>.+?) \(\d+\), Killer: (?P<zabojca>.+?) \(\d+\) Weapon: (?P<bron>.+?) S:.*Distance: (?P<distance>[\d\.]+) m",
         re.MULTILINE
     )
 
     entries = []
     for match in pattern.finditer(content):
-        data_czas_raw = match.group(1)
-        ofiara = match.group(2).strip()
-        zabojca = match.group(3).strip()
-        bron = match.group(4).strip()
-        odleglosc = match.group(5).strip()
+        data_czas_raw = match.group("data")
+        ofiara = match.group("ofiara").strip()
+        zabojca = match.group("zabojca").strip()
+        bron = match.group("bron").strip()
 
         dt_str = data_czas_raw.replace('.', '-').replace('-', ' ', 1).replace('-', ':', 1).replace('-', ':', 1)
         try:
