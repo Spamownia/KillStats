@@ -7,6 +7,8 @@ import time
 from ftplib import FTP
 from flask import Flask
 import threading
+import psycopg2
+from psycopg2 import sql
 
 # --- CONFIG ---
 FTP_HOST = "195.179.226.218"
@@ -14,9 +16,46 @@ FTP_PORT = 56421
 FTP_USER = "gpftp37275281717442833"
 FTP_PASS = "LXNdGShY"
 LOG_DIR = "/SCUM/Saved/SaveFiles/Logs"
-WEBHOOK_URL = "https://discord.com/api/webhooks/1385204325235691633/0Dey6Ywk_mDiZaBYh4cCCbuGAU5fPuLqcSpWVRkDxhVK-KIjGfzsXKkChDmAUoSrhv3R"  # Podmień na swój webhook
+WEBHOOK_URL = "https://discord.com/api/webhooks/1385204325235691633/0Dey6Ywk_mDiZaBYh4cCCbuGAU5fPuLqcSpWVRkDxhVK-KIjGfzsXKkChDmAUoSrhv3R"
+
+# Neon DB config
+PGHOST = 'ep-hidden-band-a2ir2x2r-pooler.eu-central-1.aws.neon.tech'
+PGDATABASE = 'neondb'
+PGUSER = 'neondb_owner'
+PGPASSWORD = 'npg_dRU1YCtxbh6v'
+PGSSLMODE = 'require'
 
 app = Flask(__name__)
+
+# --- DB CONNECTION ---
+def get_db_connection():
+    conn = psycopg2.connect(
+        host=PGHOST,
+        database=PGDATABASE,
+        user=PGUSER,
+        password=PGPASSWORD,
+        sslmode=PGSSLMODE
+    )
+    return conn
+
+def init_db():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS kills (
+            id SERIAL PRIMARY KEY,
+            data_czas TIMESTAMP,
+            zabojca TEXT,
+            ofiara TEXT,
+            bron TEXT,
+            odleglosc NUMERIC,
+            suma_zabojstw INT,
+            UNIQUE (data_czas, zabojca, ofiara)
+        )
+    """)
+    conn.commit()
+    cur.close()
+    conn.close()
 
 # --- FTP FUNCTIONS ---
 def get_file_list(ftp):
@@ -29,38 +68,47 @@ def get_file_list(ftp):
     ftp.retrlines('LIST', callback=parse_line)
     return files
 
+def download_all_kill_logs():
+    ftp = FTP()
+    ftp.connect(FTP_HOST, FTP_PORT)
+    ftp.login(FTP_USER, FTP_PASS)
+    ftp.cwd(LOG_DIR)
+    files = get_file_list(ftp)
+    kill_logs = sorted([f for f in files if f.startswith("kill_") and f.endswith(".log")])
+    local_files = []
+    os.makedirs("logs", exist_ok=True)
+    for log in kill_logs:
+        local_path = f"logs/{log}"
+        with open(local_path, "wb") as f:
+            ftp.retrbinary(f"RETR {log}", f.write)
+        local_files.append(local_path)
+    ftp.quit()
+    return local_files
+
 def get_latest_log_from_ftp():
     ftp = FTP()
     ftp.connect(FTP_HOST, FTP_PORT)
     ftp.login(FTP_USER, FTP_PASS)
     ftp.cwd(LOG_DIR)
-
     files = get_file_list(ftp)
     kill_logs = sorted([f for f in files if f.startswith("kill_") and f.endswith(".log")])
     if not kill_logs:
         ftp.quit()
         return None
-
     latest_log = kill_logs[-1]
-    print(f"[FTP] Ostatni log: {latest_log}")
-
     local_log = "latest_kill.log"
     with open(local_log, "wb") as f:
         ftp.retrbinary(f"RETR {latest_log}", f.write)
-
     ftp.quit()
     return local_log
 
 def read_new_lines(log_file, cache_file="last_log_line.txt"):
     if not os.path.exists(cache_file):
         open(cache_file, 'w').close()
-
     with open(cache_file, "r") as f:
         last_line = f.read().strip()
-
-    with open(log_file, "r", encoding="utf-8", errors="ignore") as f:
+    with open(log_file, "r", encoding="utf-16-le", errors="ignore") as f:
         lines = f.readlines()
-
     new_lines = []
     found_last = last_line == ""
     for line in lines:
@@ -69,24 +117,25 @@ def read_new_lines(log_file, cache_file="last_log_line.txt"):
             new_lines.append(line)
         elif line == last_line:
             found_last = True
-
     if lines:
         with open(cache_file, "w") as f:
             f.write(lines[-1].strip())
-
     return new_lines
 
+# --- LOG PARSING ---
 def parse_and_update_kills(log_lines, csv_file="kills.csv"):
     if os.path.exists(csv_file):
         with open(csv_file, mode='r', newline='', encoding='utf-8') as file:
-            reader = csv.DictReader(file)
-            rows = list(reader)
-            last_count = int(rows[-1]["suma_zabojstw"]) if rows else 0
+            reader = list(csv.DictReader(file))
+            last_count = int(reader[-1]["suma_zabojstw"]) if reader else 0
     else:
         last_count = 0
 
     file_exists = os.path.isfile(csv_file)
     fieldnames = ["data_czas", "zabojca", "ofiara", "bron", "odleglosc", "suma_zabojstw"]
+
+    conn = get_db_connection()
+    cur = conn.cursor()
 
     with open(csv_file, mode='a', newline='', encoding='utf-8') as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
@@ -105,6 +154,7 @@ def parse_and_update_kills(log_lines, csv_file="kills.csv"):
 
                     last_count += 1
 
+                    # Save to CSV
                     writer.writerow({
                         "data_czas": data_czas,
                         "zabojca": zabojca,
@@ -113,19 +163,33 @@ def parse_and_update_kills(log_lines, csv_file="kills.csv"):
                         "odleglosc": odleglosc,
                         "suma_zabojstw": last_count
                     })
+
+                    # Save to DB
+                    try:
+                        cur.execute("""
+                            INSERT INTO kills (data_czas, zabojca, ofiara, bron, odleglosc, suma_zabojstw)
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (data_czas, zabojca, ofiara) DO NOTHING
+                        """, (data_czas, zabojca, ofiara, bron, odleglosc, last_count))
+                    except Exception as e:
+                        print(f"[DB ERROR] {e}")
+
                     print(f"[OK] Zapisano: {data_czas}, {zabojca}, {ofiara}, {bron}, {odleglosc}m, suma: {last_count}")
 
+    conn.commit()
+    cur.close()
+    conn.close()
+
+# --- PODIUM ---
 def generate_podium(csv_file="kills.csv", podium_file="podium.csv"):
     kills_count = Counter()
     with open(csv_file, mode='r', newline='', encoding='utf-8') as file:
         reader = csv.DictReader(file)
         for row in reader:
             kills_count[row["zabojca"]] += 1
-
     sorted_kills = kills_count.most_common()
     podium_rows = []
     medale = ["🥇", "🥈", "🥉"]
-
     for i, (nick, ilosc) in enumerate(sorted_kills, start=1):
         medal = medale[i-1] if i <= 3 else ""
         podium_rows.append({
@@ -134,13 +198,11 @@ def generate_podium(csv_file="kills.csv", podium_file="podium.csv"):
             "Nick": nick,
             "Suma Zabójstw": str(ilosc)
         })
-
     fieldnames = ["medal", "Miejsce", "Nick", "Suma Zabójstw"]
     col_widths = {field: len(field) for field in fieldnames}
     for row in podium_rows:
         for field in fieldnames:
             col_widths[field] = max(col_widths[field], len(row.get(field, "")))
-
     lines = ["🏆RANKING🏆", ""]
     header = " | ".join(f"{field.center(col_widths[field])}" if field != "medal" else " ".center(col_widths[field]) for field in fieldnames)
     separator = "-+-".join('-'*col_widths[field] for field in fieldnames)
@@ -149,27 +211,17 @@ def generate_podium(csv_file="kills.csv", podium_file="podium.csv"):
     for row in podium_rows:
         line = " | ".join(f"{row.get(field,'').center(col_widths[field])}" for field in fieldnames)
         lines.append(line)
-
     table_text = "```\n" + "\n".join(lines) + "\n```"
-
     with open(podium_file, mode='w', newline='', encoding='utf-8') as file:
         writer = csv.DictWriter(file, fieldnames=fieldnames)
         writer.writeheader()
         for row in podium_rows:
             writer.writerow(row)
+    requests.post(WEBHOOK_URL, json={"content": table_text})
 
-    print(f"[OK] Podium zapisane do {podium_file}")
-
-    response = requests.post(WEBHOOK_URL, json={"content": table_text})
-    if response.status_code == 204:
-        print("[OK] Tabela podium wysłana na Discord.")
-    else:
-        print(f"[BŁĄD] Nie udało się wysłać na Discord: {response.status_code} {response.text}")
-
-# --- BACKGROUND WORKER FUNCTION ---
+# --- BACKGROUND ---
 def background_worker():
     print("[START] Skrypt uruchomiony w wątku. Sprawdzanie co 60 sekund...")
-
     while True:
         try:
             latest_log_file = get_latest_log_from_ftp()
@@ -185,20 +237,19 @@ def background_worker():
                     print("[INFO] Brak nowych wpisów w logu.")
         except Exception as e:
             print(f"[BŁĄD] Wyjątek: {e}")
-
         time.sleep(60)
-
-# --- FLASK ROUTES ---
-@app.route("/")
-def index():
-    return "Alive"
 
 # --- MAIN ---
 if __name__ == "__main__":
-    # Uruchomienie background worker w osobnym wątku
+    init_db()
+    print("[INIT] Pobieranie wszystkich logów i zapis do bazy...")
+    all_logs = download_all_kill_logs()
+    for log_path in all_logs:
+        with open(log_path, "r", encoding="utf-16-le", errors="ignore") as f:
+            lines = f.readlines()
+        parse_and_update_kills(lines)
+
     t = threading.Thread(target=background_worker)
     t.daemon = True
     t.start()
-
-    # Start serwera Flask
     app.run(host="0.0.0.0", port=3000)
