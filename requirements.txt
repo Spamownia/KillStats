@@ -4,7 +4,6 @@ pandas
 openpyxl
 xlsxwriter
 flask
-psycopg2-binary
 tabulate
 python-dotenv
 psycopg2-binary==2.9.9
