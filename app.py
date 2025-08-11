@@ -67,7 +67,7 @@ def parse_log(filename):
     content = b"".join(log_data).decode("utf-16-le", errors="ignore")
 
     pattern = re.compile(
-        r"^(?P<data>\d{4}\.\d{2}\.\d{2}-\d{2}\.\d{2}\.\d{2}): Died: (?P<ofiara>.+?) \(\d+\), Killer: (?P<zabojca>.+?) \(\d+\) Weapon: (?P<bron>.+?) S:.*Distance: (?P<distance>[\d\.]+) m",
+        r"^(?P<data>\d{4}\.\d{2}\.\d{2}-\d{2}\.\d{2}\.\d{2}): Died: (?P<ofiara>.+?) \(\d+\), Killer: (?P<zabojca>.+?) \(\d+\) Weapon: (?P<bron>.+?) S:\[.*Distance: (?P<distance>[\d\.]+) m\]",
         re.MULTILINE
     )
 
@@ -78,10 +78,10 @@ def parse_log(filename):
         zabojca = match.group("zabojca").strip()
         bron = match.group("bron").strip()
 
-        # Poprawione formatowanie daty dla czytelności i stabilności
         try:
             dt_str = data_czas_raw.replace('.', '-')
-            dt_str = dt_str[:10] + ' ' + dt_str[11:].replace('.', ':')
+            parts = dt_str.split('-')
+            dt_str = f"{parts[0]}-{parts[1]}-{parts[2]} {parts[3]}:{parts[4]}:{parts[5]}"
             data_czas = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
         except Exception as e:
             print(f"[DEBUG][BŁĄD DATY] Nie udało się sparsować daty '{data_czas_raw}': {e}")
