@@ -4,28 +4,28 @@ import os
 import re
 import requests
 import time
-import threading
 from ftplib import FTP
 from flask import Flask
+import threading
 
-# FTP config
+# --- CONFIG ---
 FTP_HOST = "195.179.226.218"
 FTP_PORT = 56421
 FTP_USER = "gpftp37275281717442833"
 FTP_PASS = "LXNdGShY"
 LOG_DIR = "/SCUM/Saved/SaveFiles/Logs"
+WEBHOOK_URL = "https://discord.com/api/webhooks/1385204325235691633/0Dey6Ywk_mDiZaBYh4cCCbuGAU5fPuLqcSpWVRkDxhVK-KIjGfzsXKkChDmAUoSrhv3R"  # Podmień na swój webhook
 
-WEBHOOK_URL = "https://discord.com/api/webhooks/1396497733984059472/ie6Hk_yTKETBHBriA9aCP0IbWJbqwXeskGiAdMyP2RMy_ww1Z2h2UCaw4jTbbOJ_e3gO"  # Podmień na swój webhook
+app = Flask(__name__)
 
+# --- FTP FUNCTIONS ---
 def get_file_list(ftp):
     files = []
-
     def parse_line(line):
         parts = line.split(maxsplit=8)
         if len(parts) == 9:
             filename = parts[8]
             files.append(filename)
-
     ftp.retrlines('LIST', callback=parse_line)
     return files
 
@@ -58,7 +58,7 @@ def read_new_lines(log_file, cache_file="last_log_line.txt"):
     with open(cache_file, "r") as f:
         last_line = f.read().strip()
 
-    with open(log_file, "r", encoding="utf-16-le", errors="ignore") as f:
+    with open(log_file, "r", encoding="utf-8", errors="ignore") as f:
         lines = f.readlines()
 
     new_lines = []
@@ -166,8 +166,10 @@ def generate_podium(csv_file="kills.csv", podium_file="podium.csv"):
     else:
         print(f"[BŁĄD] Nie udało się wysłać na Discord: {response.status_code} {response.text}")
 
-def main_loop():
-    print("[START] Skrypt uruchomiony. Sprawdzanie co 60 sekund...")
+# --- BACKGROUND WORKER FUNCTION ---
+def background_worker():
+    print("[START] Skrypt uruchomiony w wątku. Sprawdzanie co 60 sekund...")
+
     while True:
         try:
             latest_log_file = get_latest_log_from_ftp()
@@ -186,17 +188,17 @@ def main_loop():
 
         time.sleep(60)
 
-# 🔷 Flask server setup
-app = Flask(__name__)
-
-@app.route('/')
+# --- FLASK ROUTES ---
+@app.route("/")
 def index():
     return "Alive"
 
+# --- MAIN ---
 if __name__ == "__main__":
-    # Uruchom główną pętlę w osobnym wątku
-    t = threading.Thread(target=main_loop, daemon=True)
+    # Uruchomienie background worker w osobnym wątku
+    t = threading.Thread(target=background_worker)
+    t.daemon = True
     t.start()
 
-    # Uruchom serwer Flask na 0.0.0.0:10000
-    app.run(host='0.0.0.0', port=10000)
+    # Start serwera Flask
+    app.run(host="0.0.0.0", port=3000)
